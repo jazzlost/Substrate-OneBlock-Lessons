@@ -1,0 +1,21 @@
+{
+  "name": "my_api_practice",
+  "version": "0.0.1",
+  "main": "main.ts",
+  "author": "lichen-972",
+  "license": "MIT",
+  "private": false,
+  "scripts": {
+    "start": "node --use_strict main.ts",
+    "start:dev": "nodemon --use_strict --inspect main.ts",
+    "start:debug": "nodemon --use_strict --inspect DUBUG=* main.ts"
+  },
+  "dependencies": {
+    "@polkadot/api": "^8.13.1",
+    "@polkadot/types": "^8.13.1",
+    "web3": "^1.7.4"
+  },
+  "devDependencies": {
+    "nodemon": "^2.0.19"
+  }
+}
