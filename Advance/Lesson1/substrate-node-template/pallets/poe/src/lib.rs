@@ -41,6 +41,7 @@ pub mod pallet {
     {
         ClaimCreated(T::AccountId, Vec<u8>),
         ClaimRevoked(T::AccountId, Vec<u8>),
+        ClaimTransfered(T::AccountId, T::AccountId, Vec<u8>),
     }
 
     #[pallet::error]
@@ -119,9 +120,12 @@ pub mod pallet {
             ensure!(sender == owner, Error::<T>::NotClaimOwner);
             
             /* Replace proof owner */
-            Proofs::<T>::insert(&bounded_claim, (dest, frame_system::Pallet::<T>::block_number()));
+            Proofs::<T>::insert(&bounded_claim, (dest.clone(), frame_system::Pallet::<T>::block_number()));
+
+            /* Post Event */
+            Self::deposit_event(Event::ClaimTransfered(sender, dest, claim));
 
             Ok(().into())
         }
     }
-} 
+}
