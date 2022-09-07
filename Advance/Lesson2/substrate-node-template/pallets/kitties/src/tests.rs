@@ -1,5 +1,5 @@
 use crate::mock::{Event as TestEvent, new_test_ext, Kitties as KittiesMod, Origin, System, Test};
-use frame_support::{assert_noop, assert_ok};
+use frame_support::{assert_noop, assert_ok, bounded_vec, assert_err};
 // use super::*;
 use crate::*;
 
@@ -21,7 +21,8 @@ fn create_works()
 	new_test_ext().execute_with(|| {		
 		assert_ok!(KittiesMod::create(Origin::signed(ACCOUNT_ID_1)));
 		assert_eq!(KittyCount::<Test>::get(), 1);
-		assert_eq!(KittyOwner::<Test>::get(0), Some(ACCOUNT_ID_1));
+		assert_eq!(KittyOwnedBy::<Test>::get(0), Some(ACCOUNT_ID_1));
+		assert_eq!(OwnedKitty::<Test>::get(ACCOUNT_ID_1), Some(bounded_vec![0]));
 		
 		assert_has_event!(Event::<Test>::KittyCreated(ACCOUNT_ID_1, 0, Kitties::<Test>::get(0).unwrap()));
 	});
@@ -35,6 +36,18 @@ fn create_failed_not_enough_balance_reserved()
 	});
 }
 
+#[test]
+fn create_failed_exceed_max_owned()
+{
+	new_test_ext().execute_with(|| {
+		assert_ok!(KittiesMod::create(Origin::signed(ACCOUNT_ID_1)));
+		assert_ok!(KittiesMod::create(Origin::signed(ACCOUNT_ID_1)));
+		assert_ok!(KittiesMod::create(Origin::signed(ACCOUNT_ID_1)));
+
+		assert_err!(KittiesMod::create(Origin::signed(ACCOUNT_ID_1)), Error::<Test>::ExceedMaxOwned);
+	});
+}
+
 /****************************************BREED***************************************************/
 #[test]
 fn breed_works()
@@ -44,7 +57,9 @@ fn breed_works()
 		assert_ok!(KittiesMod::create(Origin::signed(ACCOUNT_ID_2)));
 		assert_ok!(KittiesMod::breed(Origin::signed(ACCOUNT_ID_1), 0, 1));
 		assert_eq!(KittyCount::<Test>::get(), 3);
-		assert_eq!(KittyOwner::<Test>::get(2), Some(ACCOUNT_ID_1));
+		assert_eq!(KittyOwnedBy::<Test>::get(2), Some(ACCOUNT_ID_1));
+		assert_eq!(OwnedKitty::<Test>::get(ACCOUNT_ID_1), Some(bounded_vec![0, 2]));
+		assert_eq!(OwnedKitty::<Test>::get(ACCOUNT_ID_2), Some(bounded_vec![1]));
 		
 		assert_has_event!(Event::<Test>::KittyBreed(ACCOUNT_ID_1, 2, Kitties::<Test>::get(2).unwrap()));
 	});
@@ -80,15 +95,28 @@ fn breed_failed_not_enough_balance_reserved()
 	})
 }
 
+#[test]
+fn breed_failed_exceed_max_owned()
+{
+	new_test_ext().execute_with(|| {
+		assert_ok!(KittiesMod::create(Origin::signed(ACCOUNT_ID_1)));
+		assert_ok!(KittiesMod::create(Origin::signed(ACCOUNT_ID_1)));
+		assert_ok!(KittiesMod::create(Origin::signed(ACCOUNT_ID_1)));
+
+		assert_err!(KittiesMod::breed(Origin::signed(ACCOUNT_ID_1), 0, 1), Error::<Test>::ExceedMaxOwned);
+	});
+}
+
 /****************************************TRANSFER***************************************************/
 #[test]
 fn transfer_works()
 {
 	new_test_ext().execute_with(|| {
 		assert_ok!(KittiesMod::create(Origin::signed(ACCOUNT_ID_1)));
-		assert_eq!(KittyOwner::<Test>::get(0), Some(ACCOUNT_ID_1));
+		assert_eq!(KittyOwnedBy::<Test>::get(0), Some(ACCOUNT_ID_1));
 		assert_ok!(KittiesMod::transfer(Origin::signed(ACCOUNT_ID_1), 0, ACCOUNT_ID_2));
-		assert_eq!(KittyOwner::<Test>::get(0), Some(ACCOUNT_ID_2));
+		assert_eq!(KittyOwnedBy::<Test>::get(0), Some(ACCOUNT_ID_2));
+		assert_eq!(OwnedKitty::<Test>::get(ACCOUNT_ID_2), Some(bounded_vec![0]));
 		
 		assert_has_event!(Event::<Test>::KittyTransferred(ACCOUNT_ID_1, ACCOUNT_ID_2, 0));
 	});
@@ -119,6 +147,19 @@ fn transfer_failed_not_enough_balance_reserved()
 		assert_ok!(KittiesMod::create(Origin::signed(ACCOUNT_ID_1)));
 		assert_noop!(KittiesMod::transfer(Origin::signed(ACCOUNT_ID_1), 0, ACCOUNT_ID_3), Error::<Test>::NotEnoughBalanceReserved);
 	})
+}
+
+#[test]
+fn transfer_failed_exceed_max_owned()
+{
+	new_test_ext().execute_with(|| {
+		assert_ok!(KittiesMod::create(Origin::signed(ACCOUNT_ID_1)));
+		assert_ok!(KittiesMod::create(Origin::signed(ACCOUNT_ID_2)));
+		assert_ok!(KittiesMod::create(Origin::signed(ACCOUNT_ID_2)));
+		assert_ok!(KittiesMod::create(Origin::signed(ACCOUNT_ID_2)));
+
+		assert_err!(KittiesMod::transfer(Origin::signed(ACCOUNT_ID_1), 0, ACCOUNT_ID_2), Error::<Test>::ExceedMaxOwned);
+	});
 }
 /****************************************SELL***************************************************/
 #[test]
@@ -157,7 +198,8 @@ fn buy_works()
 		assert_ok!(KittiesMod::create(Origin::signed(ACCOUNT_ID_1)));
 		assert_ok!(KittiesMod::sell(Origin::signed(ACCOUNT_ID_1), 0, Some(price)));
 		assert_ok!(KittiesMod::buy(Origin::signed(ACCOUNT_ID_2), 0));
-		assert_eq!(KittyOwner::<Test>::get(0), Some(ACCOUNT_ID_2));
+		assert_eq!(KittyOwnedBy::<Test>::get(0), Some(ACCOUNT_ID_2));
+		assert_eq!(OwnedKitty::<Test>::get(ACCOUNT_ID_2), Some(bounded_vec![0]));
 	
 		assert_has_event!(Event::<Test>::KittySaled(ACCOUNT_ID_1, ACCOUNT_ID_2, 0, Some(price)));
 	});
@@ -193,5 +235,22 @@ fn buy_failed_not_enought_balance_buy()
 		assert_ok!(KittiesMod::create(Origin::signed(ACCOUNT_ID_1)));
 		assert_ok!(KittiesMod::sell(Origin::signed(ACCOUNT_ID_1), 0, Some(price)));	
 		assert_noop!(KittiesMod::buy(Origin::signed(ACCOUNT_ID_4), 0), Error::<Test>::NotEnoughBalanceBuy);
+	});
+}
+
+#[test]
+fn buy_failed_exceed_max_owned()
+{
+	new_test_ext().execute_with(|| {
+		let price: u128 = 2_000;
+	
+		assert_ok!(KittiesMod::create(Origin::signed(ACCOUNT_ID_1)));
+		assert_ok!(KittiesMod::create(Origin::signed(ACCOUNT_ID_2)));
+		assert_ok!(KittiesMod::create(Origin::signed(ACCOUNT_ID_2)));
+		assert_ok!(KittiesMod::create(Origin::signed(ACCOUNT_ID_2)));
+
+		assert_ok!(KittiesMod::sell(Origin::signed(ACCOUNT_ID_1), 0, Some(price)));
+		
+		assert_err!(KittiesMod::buy(Origin::signed(ACCOUNT_ID_2), 0), Error::<Test>::ExceedMaxOwned);
 	});
 }

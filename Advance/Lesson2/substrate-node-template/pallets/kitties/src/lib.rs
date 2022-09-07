@@ -35,6 +35,9 @@ pub mod pallet {
 
         #[pallet::constant]
         type Reserved: Get<BalanceOf<Self>>;
+
+        #[pallet::constant]
+        type MaxOwnedAllowed: Get<u32>;
     }
 
     #[pallet::type_value]
@@ -59,8 +62,12 @@ pub mod pallet {
 
     /* Storage for all kitties of owner */
     #[pallet::storage]
-    #[pallet::getter(fn kitty_owner)]
-    pub type KittyOwner<T: Config> = StorageMap<_, Blake2_128Concat, T::KittyIndex, T::AccountId>;
+    #[pallet::getter(fn owned_kitty)]
+    pub type OwnedKitty<T: Config> = StorageMap<_, Blake2_128Concat, T::AccountId, BoundedVec<T::KittyIndex, T::MaxOwnedAllowed>>;
+
+    #[pallet::storage]
+    #[pallet::getter(fn kitty_owned_by)]
+    pub type KittyOwnedBy<T: Config> = StorageMap<_, Blake2_128Concat, T::KittyIndex, T::AccountId>;
 
     /* Kitties sale list, none means not for sale */
     #[pallet::storage]
@@ -88,6 +95,7 @@ pub mod pallet {
         AlreadyOwned,
         NotForSale,
         NotEnoughBalanceBuy,
+        ExceedMaxOwned,
     }
 
     #[pallet::hooks]
@@ -150,15 +158,18 @@ pub mod pallet {
             Self::get_kitty(kitty_id).map_err(|_| Error::<T>::InvalidKittyId)?;
 
             /* Only owner can transfer */
-            ensure!(Self::kitty_owner(kitty_id) == Some(sender.clone()), Error::<T>::NotOwner);
-
+            ensure!(Self::kitty_owned_by(kitty_id) == Some(sender.clone()), Error::<T>::NotOwner);
+            
             /* Reserve on target account */
             T::Currency::reserve(&who, T::Reserved::get()).map_err(|_| Error::<T>::NotEnoughBalanceReserved)?;
             /* Unreserve on source account */
             T::Currency::unreserve(&sender, T::Reserved::get());
 
             /* Transfer kitty */
-            KittyOwner::<T>::insert(kitty_id, who.clone());
+            KittyOwnedBy::<T>::insert(kitty_id, who.clone());
+
+            /* Update ownership map */
+            Self::update_to_new_owner(kitty_id, sender.clone(), who.clone())?;
 
             /* Post event */
             Self::deposit_event(Event::KittyTransferred(sender, who, kitty_id));
@@ -169,13 +180,16 @@ pub mod pallet {
         #[pallet::weight(10_000)]
         pub fn sell(origin: OriginFor<T>, kitty_id: T::KittyIndex, price: Option<BalanceOf<T>>) -> DispatchResultWithPostInfo
         {
-            /*  */
+            /* Check signature */
             let sender = ensure_signed(origin)?;
 
-            ensure!(Self::kitty_owner(kitty_id) == Some(sender.clone()), Error::<T>::NotOwner);
+            /* Only owner can sell */
+            ensure!(Self::kitty_owned_by(kitty_id) == Some(sender.clone()), Error::<T>::NotOwner);
 
+            /* Add to sale list */
             SaleList::<T>::insert(kitty_id, price);
 
+            /* Post event */
             Self::deposit_event(Event::<T>::KittyOnSale(sender, kitty_id, price));
 
             Ok(().into())
@@ -184,25 +198,39 @@ pub mod pallet {
         #[pallet::weight(10_000)]
         pub fn buy(origin: OriginFor<T>, kitty_id: T::KittyIndex) -> DispatchResultWithPostInfo
         {
-            let sender = ensure_signed(origin)?;
-            let owner = KittyOwner::<T>::get(kitty_id).unwrap();
+            /* Check signature  */
+            let buyer = ensure_signed(origin)?;
+            /* Get owner account id */
+            let owner = KittyOwnedBy::<T>::get(kitty_id).unwrap();
 
-            ensure!(sender.clone() != owner.clone(), Error::<T>::AlreadyOwned);
+            /* Can not buy from self */
+            ensure!(buyer.clone() != owner.clone(), Error::<T>::AlreadyOwned);
 
+            /* Get sale price */
             let price = SaleList::<T>::get(kitty_id).ok_or(Error::<T>::NotForSale)?;
 
-            ensure!(T::Currency::free_balance(&sender) > (price + T::Reserved::get()), Error::<T>::NotEnoughBalanceBuy);
+            /* Check free balance is enough */
+            ensure!(T::Currency::free_balance(&buyer) > (price + T::Reserved::get()), Error::<T>::NotEnoughBalanceBuy);
 
-            T::Currency::reserve(&sender, T::Reserved::get()).map_err(|_| Error::<T>::NotEnoughBalanceReserved)?;
+            /* Reserve on buyer */
+            T::Currency::reserve(&buyer, T::Reserved::get()).map_err(|_| Error::<T>::NotEnoughBalanceReserved)?;
+            /* Unreserve on owner */
             T::Currency::unreserve(&owner, T::Reserved::get());
 
-            T::Currency::transfer(&sender, &owner, price, frame_support::traits::ExistenceRequirement::KeepAlive)?;
+            /* Transfer cost price to owner */
+            T::Currency::transfer(&buyer, &owner, price, frame_support::traits::ExistenceRequirement::KeepAlive)?;
 
-            KittyOwner::<T>::insert(kitty_id, sender.clone());
+            /* Update owned by map */
+            KittyOwnedBy::<T>::insert(kitty_id, buyer.clone());
 
+            /* Update ownership map */
+            Self::update_to_new_owner(kitty_id, owner.clone(), buyer.clone())?;
+
+            /* Remove from sale list */
             SaleList::<T>::remove(kitty_id);
 
-            Self::deposit_event(Event::<T>::KittySaled(owner, sender, kitty_id, Some(price)));
+            /* Post event */
+            Self::deposit_event(Event::<T>::KittySaled(owner, buyer, kitty_id, Some(price)));
 
             Ok(().into())
         }
@@ -242,20 +270,51 @@ pub mod pallet {
             }
         }
 
+        fn update_to_new_owner(kitty_id: T::KittyIndex, from: T::AccountId, to: T::AccountId) -> Result<(), Error<T>>
+        {
+            /* Get old owners kitty vec */
+            let mut from_owned = OwnedKitty::<T>::get(&from).unwrap();
+            /* Get new owners kitty vec */
+            let mut to_owned = OwnedKitty::<T>::get(&to).unwrap_or(BoundedVec::<T::KittyIndex, T::MaxOwnedAllowed>::default());
+
+			/* Remove kitty from owners kitty vec, add to new owners kitty vec */
+			if let Some(ind) = from_owned.iter().position(|ids| *ids == kitty_id) 
+            {
+				let swap_id = from_owned.swap_remove(ind);
+                to_owned.try_push(swap_id.clone()).map_err(|_| Error::<T>::ExceedMaxOwned)?;
+                OwnedKitty::<T>::insert(to, to_owned);
+
+                return Ok(());
+			}
+
+            Err(Error::<T>::InvalidKittyId)
+        }
+
         fn mint(owner: &T::AccountId, dna: [u8; 16]) -> Result<(T::AccountId, T::KittyIndex, Kitty), Error<T>>
         {
+            /* Get kitty id */
             let kitty_id = Self::get_next_id().map_err(|_| Error::<T>::InvalidKittyId)?;
 
+            /* Get reversed mount */
             let reserved = T::Reserved::get();
 
+            /* Reserve on owner */
             T::Currency::reserve(&owner, reserved).map_err(|_| Error::<T>::NotEnoughBalanceReserved)?;
 
             /* New kitty from dna */
             let new_kitty = Kitty(dna);
+            
             /* Save kitty to storage */
             Kitties::<T>::insert(kitty_id, new_kitty.clone());
+            
             /* Save kitty with owner */
-            KittyOwner::<T>::insert(kitty_id, owner.clone());
+            KittyOwnedBy::<T>::insert(kitty_id, owner.clone());
+            
+            /* Update ownership map */
+            let mut owned_vec = OwnedKitty::<T>::get(&owner).unwrap_or(BoundedVec::<T::KittyIndex, T::MaxOwnedAllowed>::default());
+            owned_vec.try_push(kitty_id.clone()).map_err(|_| Error::<T>::ExceedMaxOwned)?;
+            OwnedKitty::<T>::insert(owner, owned_vec.clone());
+            
             /* Update new kitty Id */
             KittyCount::<T>::set(kitty_id + 1u32.into());
             

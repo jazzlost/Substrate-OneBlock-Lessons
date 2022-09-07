@@ -68,6 +68,7 @@ impl pallet_randomness_collective_flip::Config for Test {}
 
 parameter_types! {
 	pub const Reserved: u128 = 10_000;
+	pub const MaxOwnedAllowed: u32 = 3;
 }
 
 impl pallet_kitties::Config for Test {
@@ -76,6 +77,7 @@ impl pallet_kitties::Config for Test {
 	type KittyIndex = u32;
 	type Currency = Balances;
 	type Reserved = Reserved;
+	type MaxOwnedAllowed = MaxOwnedAllowed;
 }
 
 #[macro_export]

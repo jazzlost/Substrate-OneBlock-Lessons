@@ -144,6 +144,8 @@ parameter_types! {
 	pub const SS58Prefix: u8 = 42;
 
 	pub const Revered: u32 = 10_000;
+
+	pub const MaxOwnedAllowed: u32 = 5;
 }
 
 // Configure FRAME pallets to include in runtime.
@@ -268,12 +270,18 @@ impl pallet_template::Config for Runtime {
 	type Event = Event;
 }
 
+impl pallet_poe::Config for Runtime {
+	type Event = Event;
+	type MaxClaimLength = ConstU32<512>;
+}
+
 impl pallet_kitties::Config for Runtime {
 	type Event = Event;
 	type Randomness = RandomnessCollectiveFlip;
 	type KittyIndex = u32;
 	type Currency = Balances;
 	type Reserved = Revered;
+	type MaxOwnedAllowed = MaxOwnedAllowed;
 }
 
 // Create the runtime by composing the FRAME pallets that were previously configured.
@@ -293,6 +301,7 @@ construct_runtime!(
 		Sudo: pallet_sudo,
 		// Include the custom logic from the pallet-template in the runtime.
 		TemplateModule: pallet_template,
+		PoeModule: pallet_poe,
 		Kitties: pallet_kitties,
 	}
 );
