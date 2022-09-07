@@ -33,9 +33,11 @@ pub mod pallet {
 
         type Currency: Currency<Self::AccountId> + ReservableCurrency<Self::AccountId>;
 
+        /* Reserved mount for each kitty */
         #[pallet::constant]
         type Reserved: Get<BalanceOf<Self>>;
 
+        /* Allowed owned kitties for each account */
         #[pallet::constant]
         type MaxOwnedAllowed: Get<u32>;
     }
@@ -60,11 +62,12 @@ pub mod pallet {
     #[pallet::getter(fn kitties)]
     pub type Kitties<T: Config> = StorageMap<_, Blake2_128Concat, T::KittyIndex, Kitty>;
 
-    /* Storage for all kitties of owner */
+    /* Storage for all kitties under each account  */
     #[pallet::storage]
     #[pallet::getter(fn owned_kitty)]
     pub type OwnedKitty<T: Config> = StorageMap<_, Blake2_128Concat, T::AccountId, BoundedVec<T::KittyIndex, T::MaxOwnedAllowed>>;
-
+    
+    /* Storage for kitty id with owner account */
     #[pallet::storage]
     #[pallet::getter(fn kitty_owned_by)]
     pub type KittyOwnedBy<T: Config> = StorageMap<_, Blake2_128Concat, T::KittyIndex, T::AccountId>;
